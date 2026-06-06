@@ -20,23 +20,52 @@ the plain `GITHUB_TOKEN`).
 
 ## Using it (consumers + developers)
 
-vcpkg reads a plain local directory via the `files` provider. Restore the tarball into that dir, then point
-vcpkg at it:
+The idea is always the same: download the tarball for your baseline + RID, extract it into a local dir, and
+point vcpkg at that dir with `VCPKG_BINARY_SOURCES=clear;files,<dir>,readwrite`. Then build normally - vcpkg
+replays the cached deps instead of compiling them. No auth, no login; the release is public.
 
-```
-VCPKG_BINARY_SOURCES = "clear;files,<dir>,readwrite"
+Pick your RID: `linux-x64`, `osx-arm64`, `osx-x64`, `win-x64`, `win-x86`. The baseline is the
+`builtin-baseline` value in the `vcpkg.json` you build against (e.g. ziti-sdk-c's, or ziti-sdk-csharp's
+`native/ZitiNativeApiForDotnetCore/vcpkg.json`).
+
+### Linux / macOS (bash)
+
+Needs `jq`, `curl`, `tar` (all standard). Run from your repo so vcpkg picks up the exported variable:
+
+```bash
+RID=linux-x64                                   # or osx-arm64 / osx-x64
+BASELINE=$(jq -r '."builtin-baseline"' vcpkg.json)
+CACHE="$PWD/vcpkg-bincache"; mkdir -p "$CACHE"
+URL="https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/native-build-cache/$BASELINE-$RID.tgz"
+curl -fsSL "$URL" | tar -xz -C "$CACHE"
+export VCPKG_BINARY_SOURCES="clear;files,$CACHE,readwrite"
+# now: cmake --preset ... / vcpkg install ... -- deps come from the cache
 ```
 
-The easy way (CI or local) is `scripts/sync-vcpkg-cache.ps1`, which reads your baseline and pulls the right
-asset:
+### Windows (PowerShell)
+
+Windows 10+ ships `curl.exe` and `tar`. PowerShell 7 recommended:
+
+```powershell
+$rid = 'win-x64'                                # or win-x86
+$baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+$cache = "$PWD\vcpkg-bincache"; New-Item -ItemType Directory -Force $cache | Out-Null
+$url = "https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/native-build-cache/$baseline-$rid.tgz"
+curl.exe -fsSL $url -o "$env:TEMP\vbc.tgz"
+tar -xzf "$env:TEMP\vbc.tgz" -C $cache
+$env:VCPKG_BINARY_SOURCES = "clear;files,$cache,readwrite"
+# now: cmake --preset ... / vcpkg install ...
+```
+
+### CI, or any OS with PowerShell 7
+
+`scripts/sync-vcpkg-cache.ps1` does the baseline lookup + pull for you (and is what the consumer repos call):
 
 ```powershell
 ./scripts/sync-vcpkg-cache.ps1 -Action restore -Rid linux-x64 -VcpkgJson path/to/vcpkg.json `
     -CacheDir ./vcpkg-bincache -Repo openziti/ziti-sdk-c-binary-cache
+# then set VCPKG_BINARY_SOURCES=clear;files,./vcpkg-bincache,readwrite before building
 ```
-
-Or by hand: read `builtin-baseline` from your `vcpkg.json`, then
-`curl -L .../native-build-cache/<baseline>-<rid>.tgz | tar -xz -C <dir>`.
 
 A cache **hit** requires two things to match between this producer and your build:
 
