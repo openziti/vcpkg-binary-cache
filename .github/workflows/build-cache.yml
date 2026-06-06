@@ -53,13 +53,16 @@ jobs:
 
       # Check out ziti-sdk-c at the workspace ROOT so its local action (./.github/actions/build) and its source
       # are where that action expects them.
+      # No submodules: ziti-sdk-c has no .gitmodules, and the submodule-auth step breaks inside the builder
+      # container (it sets GIT_CONFIG_GLOBAL=/ziti-builder-gitconfig, so checkout's temp-HOME placeholder write
+      # for the --global submodule auth fails: "Unable to replace auth placeholder"). This matches ziti-sdk-c's
+      # own build-release checkout, which also omits submodules.
       - name: Checkout ziti-sdk-c (${{ inputs.ziti_ref || 'main' }})
         uses: actions/checkout@v4
         with:
           repository: openziti/ziti-sdk-c
           ref: ${{ inputs.ziti_ref || 'main' }}
           fetch-depth: 0
-          submodules: recursive
 
       # Runs ziti-sdk-c's real build (configure installs all vcpkg deps into ${GITHUB_WORKSPACE}/.ci.cache). The
       # action also installs the per-OS prereqs (gh, autotools, brew) itself, so we do not.
