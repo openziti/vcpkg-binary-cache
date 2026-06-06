@@ -4,6 +4,30 @@ A shared [vcpkg](https://vcpkg.io) **binary cache** for [ziti-sdk-c](https://git
 native dependencies (openssl, libuv, protobuf-c, etc.). It exists so ziti-sdk-c, ziti-sdk-csharp,
 ziti-tunnel-sdk-c, and individual developers don't each recompile those deps from scratch on every build.
 
+## TL;DR
+
+Prebuilt openssl/libuv/protobuf-c/etc so you don't recompile them. Run one line from your repo root (the dir
+with the `vcpkg.json` you build against), then `cmake`/`vcpkg` as normal:
+
+```bash
+# Linux / macOS - SOURCE it so the export sticks
+source <(curl -fsSL https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.sh)
+```
+```powershell
+# Windows - dot-source via iex
+iex (irm https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.ps1)
+```
+```yaml
+# GitHub Actions
+- uses: openziti/ziti-sdk-c-binary-cache/restore@main
+  with: { vcpkg-json: vcpkg.json, rid: linux-x64 }
+```
+
+It auto-detects your RID, reads the baseline from your `vcpkg.json`, downloads the matching tarball, and sets
+`VCPKG_BINARY_SOURCES`. No auth. A miss just means vcpkg builds those deps itself - never a wrong binary. You
+hit the cache only if you build in the same env ziti-sdk-c releases from (baseline + triplet + runner image);
+details below.
+
 ## How it works
 
 This repo is the **producer**. `.github/workflows/build-cache.yml` runs daily (and on manual dispatch). To
