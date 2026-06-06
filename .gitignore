@@ -1,0 +1,11 @@
+# the ziti-sdk-c checkout the producer workflow makes, and the local vcpkg cache dir it populates
+ziti-sdk-c/
+vcpkg-bincache/
+vcpkg_installed/
+
+bin
+obj
+.vs
+.idea
+*.tgz
+*.tgz.sha256

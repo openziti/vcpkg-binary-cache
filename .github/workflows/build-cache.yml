@@ -1,0 +1,76 @@
+name: Build vcpkg binary cache
+
+# Producer for the shared ziti-sdk-c vcpkg binary cache. Builds ziti-sdk-c's deps per triplet and publishes
+# them, keyed by the vcpkg baseline, to this repo's own Releases (plain GITHUB_TOKEN, no cross-repo auth).
+# Consumers (ziti-sdk-c, ziti-sdk-csharp, ziti-tunnel-sdk-c, devs) only pull, anonymously.
+on:
+  schedule:
+    - cron: '17 4 * * *'   # daily, off-peak UTC
+  workflow_dispatch:
+    inputs:
+      ziti_ref:
+        description: ziti-sdk-c ref (tag/branch) whose vcpkg.json deps to cache
+        default: main
+        required: true
+
+concurrency:
+  group: build-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Create the rolling cache release once, before the matrix, so parallel save legs do not race the create.
+  # Needs ziti-sdk-c's vcpkg.json to read the baseline for the asset naming.
+  ensure-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout ziti-sdk-c (${{ inputs.ziti_ref || 'main' }})
+        uses: actions/checkout@v4
+        with:
+          repository: openziti/ziti-sdk-c
+          ref: ${{ inputs.ziti_ref || 'main' }}
+          path: ziti-sdk-c
+      - name: Ensure the cache release exists
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -VcpkgJson ./ziti-sdk-c/vcpkg.json
+
+  build:
+    needs: ensure-release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Match the runner images consumers build on (vcpkg's ABI hash includes the compiler, so a different
+        # toolchain = a cache miss). These track ziti-sdk-csharp's CI. Cross-compiled RIDs (linux-arm/arm64,
+        # ios-arm64) need their toolchains wired up - see README, follow-up.
+        include:
+          - { rid: linux-x64, os: ubuntu-latest, triplet: x64-linux }
+          - { rid: win-x64,   os: windows-2022,  triplet: x64-windows }
+          - { rid: win-x86,   os: windows-2022,  triplet: x86-windows }
+          - { rid: osx-arm64, os: macos-14,      triplet: arm64-osx }
+          - { rid: osx-x64,   os: macos-13,      triplet: x64-osx }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout ziti-sdk-c (${{ inputs.ziti_ref || 'main' }})
+        uses: actions/checkout@v4
+        with:
+          repository: openziti/ziti-sdk-c
+          ref: ${{ inputs.ziti_ref || 'main' }}
+          path: ziti-sdk-c
+          submodules: recursive
+      - name: Build + publish cache for ${{ matrix.rid }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          ./scripts/build-cache.ps1
+          -Rid ${{ matrix.rid }}
+          -Triplet ${{ matrix.triplet }}
+          -ZitiRoot ./ziti-sdk-c
+          -CacheDir ${{ github.workspace }}/vcpkg-bincache
