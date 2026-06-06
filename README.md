@@ -23,42 +23,45 @@ produce (the producer writes to its own releases with the plain `GITHUB_TOKEN`).
 
 ## Using it (consumers + developers)
 
-The idea is always the same: download the tarball for your baseline + RID, extract it into a local dir, and
-point vcpkg at that dir with `VCPKG_BINARY_SOURCES=clear;files,<dir>,readwrite`. Then build normally - vcpkg
-replays the cached deps instead of compiling them. No auth, no login; the release is public.
+A script does the whole dance for you: detect your RID, read the baseline from your `vcpkg.json`, download the
+matching tarball, extract it, and set `VCPKG_BINARY_SOURCES` in your shell. Then build normally - vcpkg replays
+the cached deps instead of compiling them. No auth, no login; the release is public. **Run it from your repo
+root** (the dir holding the `vcpkg.json` you build against) so it finds the baseline and exports into your shell.
 
-Pick your RID: `linux-x64`, `linux-arm`, `linux-arm64`, `osx-arm64`, `osx-x64`, `win-x64`, `win-x86`,
-`win-arm64`. The baseline is the `builtin-baseline` value in the `vcpkg.json` you build against (e.g.
-ziti-sdk-c's, or ziti-sdk-csharp's `native/ZitiNativeApiForDotnetCore/vcpkg.json`).
+### Linux / macOS (bash or zsh)
 
-### Linux / macOS (bash)
-
-Needs `jq`, `curl`, `tar` (all standard). Run from your repo so vcpkg picks up the exported variable:
+Needs `curl` + `tar` (`jq` optional). It must be **sourced** so the export lands in your shell. No clone needed:
 
 ```bash
-RID=linux-x64                                   # or osx-arm64 / osx-x64
-BASELINE=$(jq -r '."builtin-baseline"' vcpkg.json)
-CACHE="$PWD/vcpkg-bincache"; mkdir -p "$CACHE"
-URL="https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/native-build-cache/$BASELINE-$RID.tgz"
-curl -fsSL "$URL" | tar -xz -C "$CACHE"
-export VCPKG_BINARY_SOURCES="clear;files,$CACHE,readwrite"
-# now: cmake --preset ... / vcpkg install ... -- deps come from the cache
+source <(curl -fsSL https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.sh)
+# build against a different manifest? pass its path (positional args flow through the curl form too):
+source <(curl -fsSL https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.sh) path/to/vcpkg.json
 ```
 
-### Windows (PowerShell)
+Cloned the repo works the same, and lets you override via env `RID` / `ZITI_CACHE_DIR` / `ZITI_CACHE_TAG`:
 
-Windows 10+ ships `curl.exe` and `tar`. PowerShell 7 recommended:
+```bash
+source scripts/restore-cache.sh                          # ./vcpkg.json, RID auto-detected
+source scripts/restore-cache.sh path/to/vcpkg.json
+```
+
+### Windows (PowerShell 5.1+ or 7)
+
+Windows 10+ ships `curl`/`tar`. **Dot-source** it (or `iex` the one-liner) so `$env:VCPKG_BINARY_SOURCES` sticks:
 
 ```powershell
-$rid = 'win-x64'                                # or win-x86
-$baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
-$cache = "$PWD\vcpkg-bincache"; New-Item -ItemType Directory -Force $cache | Out-Null
-$url = "https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/native-build-cache/$baseline-$rid.tgz"
-curl.exe -fsSL $url -o "$env:TEMP\vbc.tgz"
-tar -xzf "$env:TEMP\vbc.tgz" -C $cache
-$env:VCPKG_BINARY_SOURCES = "clear;files,$cache,readwrite"
-# now: cmake --preset ... / vcpkg install ...
+# no clone:
+iex (irm https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.ps1)
+# cloned (dot-source; lets you pass -VcpkgJson / -Rid):
+. .\scripts\restore-cache.ps1
+. .\scripts\restore-cache.ps1 -VcpkgJson native\ZitiNativeApiForDotnetCore\vcpkg.json
 ```
+
+RID is auto-detected; override with `RID=...` (bash) or `-Rid` (pwsh). Valid RIDs: `linux-x64`, `linux-arm`,
+`linux-arm64`, `osx-arm64`, `osx-x64`, `win-x64`, `win-x86`, `win-arm64`. A miss (no asset for your
+baseline+RID) is fine: vcpkg just builds those deps and fills the dir. Prefer to do it by hand? It is only:
+download `<baseline>-<rid>.tgz` from the release, `tar -xz` into a dir, and set
+`VCPKG_BINARY_SOURCES=clear;files,<dir>,readwrite`.
 
 ### GitHub Actions (the easy CI path)
 
