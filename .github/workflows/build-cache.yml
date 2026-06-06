@@ -1,15 +1,21 @@
 name: Build vcpkg binary cache
 
-# Producer for the shared ziti-sdk-c vcpkg binary cache. Builds ziti-sdk-c's deps per triplet and publishes
-# them, keyed by the vcpkg baseline, to this repo's own Releases (plain GITHUB_TOKEN, no cross-repo auth).
-# Consumers (ziti-sdk-c, ziti-sdk-csharp, ziti-tunnel-sdk-c, devs) only pull, anonymously.
+# Producer for the shared ziti-sdk-c vcpkg binary cache. To guarantee the cached deps have the EXACT ABI that
+# ziti-sdk-c ships (vcpkg's per-package hash includes the baseline, triplet, AND compiler/toolchain), this does
+# not hand-roll `vcpkg install`. It checks out ziti-sdk-c and runs ziti-sdk-c's OWN release build action
+# (./.github/actions/build) for each published target, on the same runners/containers ziti-sdk-c releases from.
+# That action already writes a vcpkg `files` binary cache to ${GITHUB_WORKSPACE}/.ci.cache; we just harvest that
+# dir and publish it, keyed by the vcpkg baseline, to this repo's own Releases (plain GITHUB_TOKEN, no cross-repo
+# auth). Consumers (ziti-sdk-c, ziti-sdk-csharp, ziti-tunnel-sdk-c, devs) only pull, anonymously. A consumer hits
+# the cache only when it builds in the same env (baseline + target/triplet + runner image); a mismatch is a clean
+# miss (rebuild), never a wrong binary.
 on:
   schedule:
     - cron: '17 4 * * *'   # daily, off-peak UTC
   workflow_dispatch:
     inputs:
       ziti_ref:
-        description: ziti-sdk-c ref (tag/branch) whose vcpkg.json deps to cache
+        description: ziti-sdk-c ref (tag/branch) whose deps to cache
         default: main
         required: true
 
@@ -18,59 +24,101 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Create the rolling cache release once, before the matrix, so parallel save legs do not race the create.
-  # Needs ziti-sdk-c's vcpkg.json to read the baseline for the asset naming.
-  ensure-release:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Checkout ziti-sdk-c (${{ inputs.ziti_ref || 'main' }})
-        uses: actions/checkout@v4
-        with:
-          repository: openziti/ziti-sdk-c
-          ref: ${{ inputs.ziti_ref || 'main' }}
-          path: ziti-sdk-c
-      - name: Ensure the cache release exists
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -VcpkgJson ./ziti-sdk-c/vcpkg.json
-
+  # The build matrix mirrors ziti-sdk-c's Publish Release matrix verbatim (runner + target + builder container),
+  # so the harvested .ci.cache matches the published artifacts' ABI. builder is unset for mac/windows => no
+  # container, exactly as ziti-sdk-c does it.
   build:
-    needs: ensure-release
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
+    name: ${{ matrix.spec.name }}
+    runs-on: ${{ matrix.spec.runner }}
+    container:
+      image: ${{ matrix.spec.builder }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
-        # Match the runner images consumers build on (vcpkg's ABI hash includes the compiler, so a different
-        # toolchain = a cache miss). These track ziti-sdk-csharp's CI. Cross-compiled RIDs (linux-arm/arm64,
-        # ios-arm64) need their toolchains wired up - see README, follow-up.
-        include:
-          - { rid: linux-x64, os: ubuntu-latest, triplet: x64-linux }
-          - { rid: win-x64,   os: windows-2022,  triplet: x64-windows }
-          - { rid: win-x86,   os: windows-2022,  triplet: x86-windows }
-          - { rid: osx-arm64, os: macos-14,      triplet: arm64-osx }
-          - { rid: osx-x64,   os: macos-13,      triplet: x64-osx }
+        spec:
+          - { name: 'Linux x86_64',   runner: 'ubuntu-latest',  target: 'linux-x64',    rid: 'linux-x64',   builder: 'openziti/ziti-builder:v3' }
+          - { name: 'Linux ARM',      runner: 'ubuntu-latest',  target: 'linux-arm',    rid: 'linux-arm',   builder: 'openziti/ziti-builder:v3' }
+          - { name: 'Linux ARM64',    runner: 'ubuntu-latest',  target: 'linux-arm64',  rid: 'linux-arm64', builder: 'openziti/ziti-builder:v3' }
+          - { name: 'MacOS x86_64',   runner: 'macos-15-intel', target: 'macOS-x64',    rid: 'osx-x64' }
+          - { name: 'MacOS arm64',    runner: 'macos-15',       target: 'macOS-arm64',  rid: 'osx-arm64' }
+          - { name: 'Windows x86_64', runner: 'windows-2025',   target: 'windows-x64',  rid: 'win-x64' }
+          - { name: 'Windows x86',    runner: 'windows-2025',   target: 'windows-x86',  rid: 'win-x86' }
+          - { name: 'Windows ARM64',  runner: 'windows-2025',   target: 'windows-arm64', rid: 'win-arm64' }
     steps:
-      - uses: actions/checkout@v4
+      - name: Add msbuild to PATH
+        if: startsWith(matrix.spec.runner, 'windows')
+        uses: microsoft/setup-msbuild@v2
+
+      # Check out ziti-sdk-c at the workspace ROOT so its local action (./.github/actions/build) and its source
+      # are where that action expects them.
       - name: Checkout ziti-sdk-c (${{ inputs.ziti_ref || 'main' }})
         uses: actions/checkout@v4
         with:
           repository: openziti/ziti-sdk-c
           ref: ${{ inputs.ziti_ref || 'main' }}
-          path: ziti-sdk-c
+          fetch-depth: 0
           submodules: recursive
-      - name: Build + publish cache for ${{ matrix.rid }}
+
+      # Runs ziti-sdk-c's real build (configure installs all vcpkg deps into ${GITHUB_WORKSPACE}/.ci.cache). The
+      # action also installs the per-OS prereqs (gh, autotools, brew) itself, so we do not.
+      - name: Build ziti-sdk-c for ${{ matrix.spec.target }}
+        uses: ./.github/actions/build
+        with:
+          target: ${{ matrix.spec.target }}
+          config: RelWithDebInfo
+
+      # Harvest the populated files cache even if a late build/package step failed: vcpkg writes complete package
+      # archives atomically during configure, so a partial .ci.cache still holds valid, reusable deps.
+      - name: Harvest .ci.cache for ${{ matrix.spec.rid }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-${{ matrix.spec.rid }}
+          path: ${{ github.workspace }}/.ci.cache
+          if-no-files-found: warn
+
+  # One publish job on a hosted runner (pwsh + gh guaranteed; the linux build legs run in a container that may
+  # have neither). Downloads every leg's harvested cache and uploads each as <baseline>-<rid>.tgz.
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4   # this repo, for scripts/
+
+      - name: Read ziti-sdk-c vcpkg.json (${{ inputs.ziti_ref || 'main' }}) for the baseline
+        uses: actions/checkout@v4
+        with:
+          repository: openziti/ziti-sdk-c
+          ref: ${{ inputs.ziti_ref || 'main' }}
+          path: ziti-sdk-c
+          sparse-checkout: vcpkg.json
+          sparse-checkout-cone-mode: false
+
+      - name: Ensure the cache release exists
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          ./scripts/build-cache.ps1
-          -Rid ${{ matrix.rid }}
-          -Triplet ${{ matrix.triplet }}
-          -ZitiRoot ./ziti-sdk-c
-          -CacheDir ${{ github.workspace }}/vcpkg-bincache
+        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -VcpkgJson ./ziti-sdk-c/vcpkg.json
+
+      - name: Download all harvested caches
+        uses: actions/download-artifact@v4
+        with:
+          path: harvested
+
+      - name: Pack + upload each RID's cache
+        shell: pwsh
+        run: |
+          $baseline = (Get-Content ./ziti-sdk-c/vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          if ([string]::IsNullOrWhiteSpace($baseline)) { throw "no builtin-baseline in ziti-sdk-c/vcpkg.json" }
+          $dirs = Get-ChildItem -Directory ./harvested -Filter 'cache-*' -ErrorAction SilentlyContinue
+          if (-not $dirs) { Write-Host "no harvested caches to publish"; return }
+          foreach ($d in $dirs) {
+            $rid = $d.Name -replace '^cache-', ''
+            Write-Host "==> saving $rid (baseline $baseline)"
+            ./scripts/sync-vcpkg-cache.ps1 -Action save -Rid $rid -CacheDir $d.FullName -Baseline $baseline
+          }
