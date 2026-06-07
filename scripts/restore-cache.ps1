@@ -32,10 +32,13 @@ if (-not $Rid) {
     $Rid = switch ($a) { 'AMD64' { 'win-x64' } 'x86' { 'win-x86' } 'ARM64' { 'win-arm64' } default { '' } }
 }
 if (-not $Rid) { Write-Error "ziti-cache: could not detect a RID (PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE); pass -Rid"; return }
+Write-Host "[ziti-cache] 1/4 detecting RID ......... $Rid"
 
+Write-Host "[ziti-cache] 2/4 detecting baseline .... reading 'builtin-baseline' from $VcpkgJson"
 if (-not (Test-Path -LiteralPath $VcpkgJson)) { Write-Error "ziti-cache: vcpkg.json not found at '$VcpkgJson' (pass -VcpkgJson)"; return }
 $baseline = (Get-Content -LiteralPath $VcpkgJson -Raw | ConvertFrom-Json).'builtin-baseline'
 if (-not $baseline) { Write-Error "ziti-cache: no builtin-baseline in '$VcpkgJson'"; return }
+Write-Host "[ziti-cache]                            $baseline"
 if (-not $Tag) { $Tag = "baseline-$baseline" }   # GitHub forbids a tag that is exactly 40/64 hex chars
 
 if (-not $CacheDir) { $CacheDir = Join-Path $PWD 'vcpkg-bincache' }
@@ -43,22 +46,23 @@ New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
 $CacheDir = (Resolve-Path -LiteralPath $CacheDir).Path
 
 $url = "https://github.com/$Repo/releases/download/$Tag/$Rid.tgz"
-Write-Host "ziti-cache: rid=$Rid baseline=$baseline"
-Write-Host "ziti-cache: GET $url"
+Write-Host "[ziti-cache] 3/4 downloading cache ..... $url"
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "ziti-vbc-$Rid.tgz"
 try {
     Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+    Write-Host "[ziti-cache]     extracting cache to  $CacheDir"
     & tar -xzf $tmp -C $CacheDir
     if ($LASTEXITCODE -ne 0) { throw "tar extract failed ($LASTEXITCODE)" }
-    Write-Host "ziti-cache: extracted cache into $CacheDir"
 }
 catch {
     if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
-        Write-Host "ziti-cache: no cached asset for this baseline+rid (miss); vcpkg will build these deps and populate $CacheDir"
+        Write-Host "[ziti-cache]     MISS: no cached asset for this baseline+rid. Not an error: vcpkg will"
+        Write-Host "[ziti-cache]           build these deps from source and write them into $CacheDir itself."
     }
     else { throw }
 }
 finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
 
 $env:VCPKG_BINARY_SOURCES = "clear;files,$CacheDir,readwrite"
-Write-Host "ziti-cache: VCPKG_BINARY_SOURCES set for this session - build normally now"
+Write-Host "[ziti-cache] 4/4 pointing vcpkg here . VCPKG_BINARY_SOURCES=$env:VCPKG_BINARY_SOURCES"
+Write-Host "[ziti-cache] done. Build as usual (cmake --preset ... / vcpkg install) - deps come from the cache."

@@ -101,10 +101,19 @@ cmake --build build
 # vcpkg restores openssl/libuv/protobuf-c/... from the cache; the slow first build becomes minutes, not an hour
 ```
 
-Two things to know:
+Things to know:
 - It must be the **same shell** the restore set `VCPKG_BINARY_SOURCES` in (or set that variable yourself).
 - `readwrite` means your build also *writes* any dep the cache was missing back into the dir, so a partial cache
   fills in locally. (Only CI with a token can push back to the shared release.)
+- **It does not touch your vcpkg setup.** `VCPKG_ROOT` (env), a `CMakeUserPresets.json`
+  `"VCPKG_ROOT": "/you/git/vcpkg"`, or a vcpkg submodule still decide *which vcpkg tool + port registry* you build
+  with - restore only sets `VCPKG_BINARY_SOURCES`, which is *where prebuilt archives are fetched/stashed*. The two
+  are orthogonal. A hit just needs your vcpkg to resolve the **same port versions** (your tree + the manifest
+  baseline) at the **same triplet + compiler** the producer used; otherwise it's a clean miss and your build
+  rebuilds that dep (and `readwrite` files it into your local dir).
+- The value begins with `clear`, which **disables vcpkg's default per-user archive cache**
+  (`VCPKG_DEFAULT_BINARY_CACHE` / `~/.cache/vcpkg/archives`) and **replaces** any `VCPKG_BINARY_SOURCES` you had
+  set (team NuGet feed, GHA cache, ...) for that shell. Drop `clear` or set the variable yourself to layer them.
 
 ### GitHub Actions (the easy CI path)
 

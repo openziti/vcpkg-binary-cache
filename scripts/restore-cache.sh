@@ -38,12 +38,14 @@ __ziti_restore_cache() {
         esac
     fi
     if [ -z "$rid" ]; then
-        echo "ziti-cache: could not detect a RID for $(uname -s)/$(uname -m); set RID=... and retry" >&2
+        echo "[ziti-cache] could not detect a RID for $(uname -s)/$(uname -m); set RID=... and retry" >&2
         return 1
     fi
+    echo "[ziti-cache] 1/4 detecting RID ......... $rid" >&2
 
+    echo "[ziti-cache] 2/4 detecting baseline .... reading 'builtin-baseline' from $vcpkg_json" >&2
     if [ ! -f "$vcpkg_json" ]; then
-        echo "ziti-cache: vcpkg.json not found at '$vcpkg_json' (pass its path as the first arg)" >&2
+        echo "[ziti-cache] vcpkg.json not found at '$vcpkg_json' (pass its path as the first arg)" >&2
         return 1
     fi
     local baseline=""
@@ -55,34 +57,36 @@ __ziti_restore_cache() {
                     | grep -oE '[0-9a-fA-F]{40}' | head -n1)"
     fi
     if [ -z "$baseline" ]; then
-        echo "ziti-cache: no builtin-baseline found in '$vcpkg_json'" >&2
+        echo "[ziti-cache] no builtin-baseline found in '$vcpkg_json'" >&2
         return 1
     fi
+    echo "[ziti-cache]                            $baseline" >&2
 
     [ -z "$tag" ] && tag="baseline-$baseline"   # GitHub forbids a tag that is exactly 40/64 hex chars
     local url="https://github.com/$repo/releases/download/$tag/$rid.tgz"
     if ! mkdir -p "$cache_dir"; then return 1; fi
-    echo "ziti-cache: rid=$rid baseline=$baseline" >&2
-    echo "ziti-cache: GET $url" >&2
+    echo "[ziti-cache] 3/4 downloading cache ..... $url" >&2
     local tmp; tmp="$(mktemp)" || return 1
     if curl -fsSL "$url" -o "$tmp"; then
+        echo "[ziti-cache]     extracting cache to  $cache_dir" >&2
         if ! tar -xzf "$tmp" -C "$cache_dir"; then
-            echo "ziti-cache: extract failed" >&2; rm -f "$tmp"; return 1
+            echo "[ziti-cache]     ERROR: extract failed" >&2; rm -f "$tmp"; return 1
         fi
-        echo "ziti-cache: extracted cache into $cache_dir" >&2
     else
-        echo "ziti-cache: no cached asset for this baseline+rid (miss); vcpkg will build these deps from" >&2
-        echo "ziti-cache: source and populate $cache_dir" >&2
+        echo "[ziti-cache]     MISS: no cached asset for this baseline+rid. Not an error: vcpkg will build" >&2
+        echo "[ziti-cache]           these deps from source and write them into $cache_dir itself." >&2
     fi
     rm -f "$tmp"
 
     local val="clear;files,$cache_dir,readwrite"
     if [ "${__ZITI_SOURCED:-0}" = "1" ]; then
         export VCPKG_BINARY_SOURCES="$val"
-        echo "ziti-cache: VCPKG_BINARY_SOURCES set for this shell - build normally now" >&2
+        echo "[ziti-cache] 4/4 pointing vcpkg here . VCPKG_BINARY_SOURCES=$val" >&2
+        echo "[ziti-cache] done. Build as usual (cmake --preset .../vcpkg install) - deps come from the cache." >&2
     else
         echo "export VCPKG_BINARY_SOURCES='$val'"
-        echo "ziti-cache: not sourced; run 'source ${BASH_SOURCE:-this script}' (or 'eval \"\$(...)\"') so it sticks" >&2
+        echo "[ziti-cache] 4/4 NOT sourced, so the export won't stick. Re-run as:" >&2
+        echo "[ziti-cache]     source ${BASH_SOURCE:-<this-script>}   (or: eval \"\$(bash <this-script>)\")" >&2
     fi
 }
 
