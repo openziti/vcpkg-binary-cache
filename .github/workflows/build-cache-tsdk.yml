@@ -1,12 +1,12 @@
 name: Build vcpkg binary cache (tsdk)
 
 # Producer for ziti-tunnel-sdk-c's vcpkg binary cache. Same idea as the csdk producer (build-cache.yml) but for
-# a different project: to get the exact ABI ttsdk ships, it checks out ziti-tunnel-sdk-c and runs ITS OWN build
-# action (./.github/actions/build) per preset, on the same runners ttsdk builds on, mirroring ttsdk's callable
+# a different project: to get the exact ABI tsdk ships, it checks out ziti-tunnel-sdk-c and runs ITS OWN build
+# action (./.github/actions/build) per preset, on the same runners tsdk builds on, mirroring tsdk's callable
 # cmake.yml. That action writes a vcpkg `files` cache to ./vcpkg_cache; we harvest it and publish to this repo's
 # Releases under tsdk-<baseline>.
 #
-# Keyed by PRESET, not RID: ttsdk has three Windows presets (mingw / win32crypto / arm64-vs2022) with different
+# Keyed by PRESET, not RID: tsdk has three Windows presets (mingw / win32crypto / arm64-vs2022) with different
 # toolchains, so the preset is the real ABI key. Assets are <preset>.tgz. Consumers pull with
 # ZITI_CACHE_PREFIX=tsdk and RID set to the preset name (see README).
 on:
@@ -14,7 +14,7 @@ on:
     - cron: '37 4 * * *'   # daily, offset from the csdk producer (17 4)
   workflow_dispatch:
     inputs:
-      ttsdk_ref:
+      tsdk_ref:
         description: ziti-tunnel-sdk-c ref (tag/branch) whose deps to cache
         default: main
         required: true
@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Mirror ttsdk's cmake.yml matrix verbatim (runner + preset). No job-level container: ttsdk runs Linux on bare
+  # Mirror tsdk's cmake.yml matrix verbatim (runner + preset). No job-level container: tsdk runs Linux on bare
   # ubuntu-22.04 and its build action spins up its own Docker (openziti-tunnel-build-action) internally.
   build:
     name: ${{ matrix.spec.name }}
@@ -45,15 +45,15 @@ jobs:
           - { name: 'Windows x86_64 (win32crypto)', runner: 'windows-2022',   preset: 'windows-x64-win32crypto' }
           - { name: 'Windows ARM64 (vs2022)',       runner: 'windows-2022',   preset: 'windows-arm64-vs2022' }
     steps:
-      # Mirror ttsdk's own checkout (cmake.yml): fetch-depth 0, NO submodules (its CI doesn't check them out).
-      - name: Checkout ziti-tunnel-sdk-c (${{ inputs.ttsdk_ref || 'main' }})
+      # Mirror tsdk's own checkout (cmake.yml): fetch-depth 0, NO submodules (its CI doesn't check them out).
+      - name: Checkout ziti-tunnel-sdk-c (${{ inputs.tsdk_ref || 'main' }})
         uses: actions/checkout@v4
         with:
           repository: openziti/ziti-tunnel-sdk-c
-          ref: ${{ inputs.ttsdk_ref || 'main' }}
+          ref: ${{ inputs.tsdk_ref || 'main' }}
           fetch-depth: 0
 
-      # Runs ttsdk's real build; configure installs all vcpkg deps into ./vcpkg_cache. The action installs its own
+      # Runs tsdk's real build; configure installs all vcpkg deps into ./vcpkg_cache. The action installs its own
       # per-OS prereqs (brew on mac; its Docker action carries them on Linux).
       - name: Build ziti-tunnel-sdk-c (${{ matrix.spec.preset }})
         uses: ./.github/actions/build
@@ -84,18 +84,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4   # this repo, for scripts/
 
-      - name: Read ttsdk vcpkg.json (${{ inputs.ttsdk_ref || 'main' }}) for the baseline
+      - name: Read tsdk vcpkg.json (${{ inputs.tsdk_ref || 'main' }}) for the baseline
         uses: actions/checkout@v4
         with:
           repository: openziti/ziti-tunnel-sdk-c
-          ref: ${{ inputs.ttsdk_ref || 'main' }}
-          path: ttsdk
+          ref: ${{ inputs.tsdk_ref || 'main' }}
+          path: tsdk
           sparse-checkout: vcpkg.json
           sparse-checkout-cone-mode: false
 
       - name: Ensure the tsdk cache release exists
         shell: pwsh
-        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -Prefix tsdk -VcpkgJson ./ttsdk/vcpkg.json
+        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -Prefix tsdk -VcpkgJson ./tsdk/vcpkg.json
 
       - name: Download all harvested caches
         uses: actions/download-artifact@v4
@@ -105,8 +105,8 @@ jobs:
       - name: Pack + upload each preset's cache
         shell: pwsh
         run: |
-          $baseline = (Get-Content ./ttsdk/vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
-          if ([string]::IsNullOrWhiteSpace($baseline)) { throw "no builtin-baseline in ttsdk/vcpkg.json" }
+          $baseline = (Get-Content ./tsdk/vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          if ([string]::IsNullOrWhiteSpace($baseline)) { throw "no builtin-baseline in tsdk/vcpkg.json" }
           $dirs = Get-ChildItem -Directory ./harvested -Filter 'cache-*' -ErrorAction SilentlyContinue
           if (-not $dirs) { Write-Host "no harvested caches to publish"; return }
           foreach ($d in $dirs) {

@@ -33,14 +33,15 @@ details below.
 
 ## How it works
 
-This repo is the **producer**. `.github/workflows/build-cache.yml` runs daily (and on manual dispatch). To
-guarantee the cached deps have the exact ABI ziti-sdk-c ships, it does not hand-roll `vcpkg install`: it checks
-out ziti-sdk-c and runs **ziti-sdk-c's own release build action** (`./.github/actions/build`) for each published
-target, on the same runners and builder containers ziti-sdk-c releases from. That action already writes a vcpkg
-`files` binary cache to `.ci.cache`; the producer harvests that directory and publishes it as a tarball on this
-repo's own Releases. Because it reuses ziti-sdk-c's build verbatim, there is zero preset/triplet/toolchain drift.
-Everyone else is a **pure anonymous reader** - no token needed to pull, and no cross-repo push auth needed to
-produce (the producer writes to its own releases with the plain `GITHUB_TOKEN`).
+This repo is the **producer**. There's one workflow per project, each running daily (and on manual dispatch):
+`build-cache.yml` for csdk (ziti-sdk-c) and `build-cache-tsdk.yml` for tsdk (ziti-tunnel-sdk-c). To guarantee
+the cached deps have the exact ABI a project ships, a producer does not hand-roll `vcpkg install`: it checks out
+that project and runs **the project's own build action** for each target, on the same runners/containers it
+releases from. That action already writes a vcpkg `files` binary cache (`.ci.cache` for csdk, `vcpkg_cache` for
+tsdk); the producer harvests that dir and publishes it as a tarball on this repo's Releases. Reusing each
+project's build verbatim means zero preset/triplet/toolchain drift. Everyone else is a **pure anonymous reader**
+- no token to pull, no cross-repo push auth to produce (each producer writes to its own releases with the plain
+`GITHUB_TOKEN`).
 
 - **One release per project + vcpkg baseline.** The release is tagged `<project>-<builtin-baseline>` (e.g.
   `csdk-56bb2411...`, `tsdk-c3867e71...`), and each holds one `<rid>.tgz` per RID. The project prefix matters:
@@ -153,6 +154,32 @@ Inputs: `vcpkg-json` and `rid` (required); `prefix` (default `csdk`), `cache-dir
 `set-binary-sources` (optional). Pin `@main` until a `v1` tag is cut. Requires PowerShell (preinstalled on all
 GitHub-hosted runners).
 
+### CMake does it for you (zero-touch)
+
+The slickest path: the **project's** CMake fetches the cache itself, so anyone who builds it - dev or CI - gets
+fast deps without knowing this repo exists, running a script, or setting any variable. It's pure CMake
+(`file(DOWNLOAD)` + `file(ARCHIVE_EXTRACT)`), no curl/tar/jq, and it works because vcpkg installs dependencies
+when its toolchain loads at `project()` - so the fetch just has to run *before* `project()`.
+
+A project maintainer adds this once, before `project()` (nothing to vendor - it bootstraps the module from here):
+
+```cmake
+# --- restore prebuilt deps before the vcpkg toolchain runs ---
+set(ZITI_VCPKG_CACHE_PREFIX csdk)   # or tsdk
+file(DOWNLOAD
+  https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/cmake/ziti-vcpkg-cache.cmake
+  ${CMAKE_BINARY_DIR}/ziti-vcpkg-cache.cmake)
+include(${CMAKE_BINARY_DIR}/ziti-vcpkg-cache.cmake)
+
+project(my_project C)   # vcpkg now restores openssl/libuv/... from the cache instead of compiling
+```
+
+Or vendor `cmake/ziti-vcpkg-cache.cmake` into the repo and `include()` it (same rules). It auto-detects the host
+RID and reads the baseline from `vcpkg.json`; override with `-DZITI_VCPKG_CACHE_RID=...` (needed for the tsdk
+Windows presets like `windows-x64-mingw`), `-DZITI_VCPKG_CACHE_PREFIX=tsdk`, or turn it off with
+`-DZITI_VCPKG_CACHE=OFF`. A miss is silent - vcpkg just builds from source. It won't touch an existing
+`VCPKG_BINARY_SOURCES`.
+
 ### CI by hand, or any OS with PowerShell 7
 
 `scripts/sync-vcpkg-cache.ps1` does the baseline lookup + pull for you (and is what the action calls):
@@ -163,28 +190,31 @@ GitHub-hosted runners).
 # then set VCPKG_BINARY_SOURCES=clear;files,./vcpkg-bincache,readwrite before building
 ```
 
-A cache **hit** requires the same three things to match between this producer and your build (vcpkg's
-per-package ABI hash covers all of them; any mismatch is a clean miss/rebuild, never a wrong binary):
+A cache **hit** requires four things to match between a producer and your build (vcpkg's per-package ABI hash
+covers all of them; any mismatch is a clean miss/rebuild, never a wrong binary):
 
-1. **Same baseline + dep set** - the producer builds ziti-sdk-c's `vcpkg.json`. If your manifest pins a
-   different `builtin-baseline`, you pull a different asset (or miss).
-2. **Same target / triplet** - the producer uses ziti-sdk-c's own `ci-<target>` presets, which carry the static
-   Windows triplets (`x64/x86/arm64-windows-static-md`), `arm64-osx`, `arm64-linux`, etc.
-3. **Same runner image / toolchain** - vcpkg's ABI hash includes the compiler. The producer builds on the exact
-   images ziti-sdk-c **releases** from: the `openziti/ziti-builder:v3` container for all Linux RIDs,
-   `windows-2025` for Windows, and `macos-15` (arm64) / `macos-15-intel` (x64) for macOS.
+1. **Same project (prefix).** Pull from the release for the project you're building - `csdk` for ziti-sdk-c,
+   `tsdk` for ziti-tunnel-sdk-c. Two projects on the same baseline still build different ABIs (different vcpkg
+   overlays), which is exactly why releases are namespaced.
+2. **Same baseline.** Each producer builds its project's `vcpkg.json`; a different `builtin-baseline` is a
+   different release (or a miss).
+3. **Same target / triplet / preset.** Each producer uses its project's own CMake presets (csdk's static
+   Windows triplets `*-windows-static-md`, `arm64-osx`, ...; tsdk's `windows-x64-mingw`, etc.).
+4. **Same runner image / toolchain.** vcpkg's ABI hash includes the compiler, so each producer builds on the
+   exact images that project **releases** from (csdk: `openziti/ziti-builder:v3` container, `windows-2025`,
+   `macos-15*`; tsdk: `ubuntu-22.04` via its own Docker action, `windows-2022`, `macos-15*`).
 
-That third point is the catch for consumers: to share this cache, **you must build in the same env**. A consumer
-on bare `ubuntu-latest` or `windows-2022` will miss every Linux/Windows dep. ziti-sdk-csharp's native build is
-being converged onto this env (builder container for Linux, `windows-2025`, `macos-15*`, and ziti-sdk-c's
-baseline) so it shares the cache; until that lands, csharp builds will miss.
+The catch for consumers: to share a cache, **you must build in the same env** as that project's producer. A
+build on a different OS image or compiler misses. (ziti-sdk-csharp's native build still needs to converge onto
+csdk's env + baseline before it can share the `csdk` cache; until then it misses.)
 
 ## Status
 
-- Covers all 8 published RIDs: `linux-x64`, `linux-arm`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`,
-  `win-x86`, `win-arm64` (no `ios-arm64` - ziti-sdk-c does not publish it).
-- The producer reuses ziti-sdk-c's full release build per leg, so a run takes about as long as a ziti-sdk-c
-  release build. A future optimization could stop after CMake configure (which is what actually populates
-  `.ci.cache`) instead of completing the compile + package.
-- New workflow: give it a manual `workflow_dispatch` run to shake out the container tooling and cross-compile
-  legs before trusting the daily cron.
+- **csdk** (`build-cache.yml`): green. Covers all 8 RIDs - `linux-x64/arm/arm64`, `osx-x64/arm64`,
+  `win-x64/x86/arm64` (no `ios-arm64`; ziti-sdk-c doesn't publish it). Assets are `<rid>.tgz`.
+- **tsdk** (`build-cache-tsdk.yml`): new, shaking out. Assets are `<preset>.tgz` (8 presets incl. the three
+  Windows variants `windows-x64-mingw`, `windows-x64-win32crypto`, `windows-arm64-vs2022`).
+- **csharp**: not built yet - needs its own producer or convergence onto csdk's baseline + env.
+- Each producer reuses its project's full release build per leg, so a run takes about as long as that project's
+  release build. A future optimization could stop after CMake configure (which is what populates the cache dir)
+  instead of completing the compile + package.
