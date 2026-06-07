@@ -23,7 +23,7 @@ param(
     [string] $Rid,
     [string] $CacheDir,
     [string] $Repo = 'openziti/ziti-sdk-c-binary-cache',
-    [string] $Tag  = 'native-build-cache'
+    [string] $Tag   # one release per baseline; defaults to the baseline read below
 )
 $ErrorActionPreference = 'Stop'
 
@@ -36,12 +36,13 @@ if (-not $Rid) { Write-Error "ziti-cache: could not detect a RID (PROCESSOR_ARCH
 if (-not (Test-Path -LiteralPath $VcpkgJson)) { Write-Error "ziti-cache: vcpkg.json not found at '$VcpkgJson' (pass -VcpkgJson)"; return }
 $baseline = (Get-Content -LiteralPath $VcpkgJson -Raw | ConvertFrom-Json).'builtin-baseline'
 if (-not $baseline) { Write-Error "ziti-cache: no builtin-baseline in '$VcpkgJson'"; return }
+if (-not $Tag) { $Tag = $baseline }
 
 if (-not $CacheDir) { $CacheDir = Join-Path $PWD 'vcpkg-bincache' }
 New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
 $CacheDir = (Resolve-Path -LiteralPath $CacheDir).Path
 
-$url = "https://github.com/$Repo/releases/download/$Tag/$baseline-$Rid.tgz"
+$url = "https://github.com/$Repo/releases/download/$Tag/$Rid.tgz"
 Write-Host "ziti-cache: rid=$Rid baseline=$baseline"
 Write-Host "ziti-cache: GET $url"
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "ziti-vbc-$Rid.tgz"

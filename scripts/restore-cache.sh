@@ -18,7 +18,7 @@
 __ziti_restore_cache() {
     local vcpkg_json="${1:-./vcpkg.json}"
     local repo="${ZITI_CACHE_REPO:-openziti/ziti-sdk-c-binary-cache}"
-    local tag="${ZITI_CACHE_TAG:-native-build-cache}"
+    local tag="${ZITI_CACHE_TAG:-}"   # one release per baseline; defaults to the baseline below
     local cache_dir="${ZITI_CACHE_DIR:-$PWD/vcpkg-bincache}"
     local rid="${RID:-}"
 
@@ -59,7 +59,8 @@ __ziti_restore_cache() {
         return 1
     fi
 
-    local url="https://github.com/$repo/releases/download/$tag/$baseline-$rid.tgz"
+    [ -z "$tag" ] && tag="$baseline"
+    local url="https://github.com/$repo/releases/download/$tag/$rid.tgz"
     if ! mkdir -p "$cache_dir"; then return 1; fi
     echo "ziti-cache: rid=$rid baseline=$baseline" >&2
     echo "ziti-cache: GET $url" >&2

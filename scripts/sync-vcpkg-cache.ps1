@@ -6,20 +6,21 @@
     The cache is the vcpkg binary-cache directory (the prebuilt openssl/protobuf/etc archives vcpkg replays so it
     does not recompile). What those archives contain is pinned by the vcpkg baseline, so we key the cache by the
     baseline (read from native/ZitiNativeApiForDotnetCore/vcpkg.json `builtin-baseline`), NOT the ziti-sdk-c
-    version. Every ziti version that shares a baseline reuses the same cache. One rolling prerelease (tag
-    `native-build-cache`) holds every baseline's tarballs, named `<baseline>-<rid>.tgz`. Pull is anonymous
-    (plain HTTPS download), so any repo or developer can grab `<baseline>-<rid>.tgz`, drop it in their files
-    cache, and build fast. Push needs a token with contents:write (CI only).
+    version. Every ziti version that shares a baseline reuses the same cache. There is one prerelease PER
+    baseline (the release tag IS the baseline), holding one `<rid>.tgz` per RID. Pull is anonymous (plain HTTPS
+    download), so any repo or developer can grab `<rid>.tgz` from their baseline's release, drop it in their
+    files cache, and build fast. Push needs a token with contents:write (CI only).
 
     No nuget, no mono: vcpkg only ever reads a local directory via VCPKG_BINARY_SOURCES=files,<dir>. This script
     just moves that directory in and out of the release.
 
     Actions:
-      ensure-release  Create the rolling prerelease if missing (idempotent). Run once before the matrix so the
-                      parallel save legs do not race the create.
-      restore         Anonymously download <baseline>-<rid>.tgz and extract into -CacheDir. A miss (404) is fine.
+      ensure-release  Create this baseline's prerelease if missing (idempotent). Run once before the matrix so
+                      the parallel save legs do not race the create.
+      restore         Anonymously download <rid>.tgz from the baseline's release and extract into -CacheDir. A
+                      miss (404) is fine.
       save            Hash -CacheDir's contents; if it differs from the sidecar on the release, tar it up and
-                      upload <baseline>-<rid>.tgz plus its .sha256 (clobbering). Unchanged = skip.
+                      upload <rid>.tgz plus its .sha256 (clobbering). Unchanged = skip.
 
 .PARAMETER Action
     ensure-release | restore | save.
@@ -40,7 +41,7 @@
     Path to the vcpkg manifest to read the baseline from. Defaults to native/ZitiNativeApiForDotnetCore/vcpkg.json.
 
 .PARAMETER Tag
-    Release tag. Defaults to native-build-cache (one rolling release holds all baselines).
+    Release tag. Defaults to the vcpkg baseline (one release per baseline). Override only for testing.
 
 .PARAMETER Token
     Token with contents:write, for ensure-release/save. Defaults to GH_TOKEN then GITHUB_TOKEN. Not needed for
@@ -57,7 +58,7 @@ param(
     [string] $CacheDir,
     [string] $Repo = $env:GITHUB_REPOSITORY,
     [string] $VcpkgJson = (Join-Path $PSScriptRoot '..' 'ziti-sdk-c' 'vcpkg.json'),
-    [string] $Tag = 'native-build-cache',
+    [string] $Tag,
     [string] $Token = ($env:GH_TOKEN ? $env:GH_TOKEN : $env:GITHUB_TOKEN)
 )
 
@@ -73,8 +74,10 @@ if ([string]::IsNullOrWhiteSpace($Baseline)) {
     $Baseline = (Get-Content -LiteralPath $VcpkgJson -Raw | ConvertFrom-Json).'builtin-baseline'
     if ([string]::IsNullOrWhiteSpace($Baseline)) { throw "no builtin-baseline in $VcpkgJson (pass -Baseline)." }
 }
-# One rolling release holds every baseline's tarballs; the baseline + RID key the asset name.
-$asset = "$Baseline-$Rid.tgz"
+# One release per vcpkg baseline: the release TAG is the baseline, so assets are just <rid>.tgz. A baseline
+# bump lands in its own release; pruning a stale baseline is just deleting that release.
+if ([string]::IsNullOrWhiteSpace($Tag)) { $Tag = $Baseline }
+$asset = "$Rid.tgz"
 $shaAsset = "$asset.sha256"
 $downloadBase = "https://github.com/$Repo/releases/download/$Tag"
 
@@ -125,9 +128,9 @@ switch ($Action) {
             Write-Host "Release '$Tag' already exists."
         }
         else {
-            Write-Host "Creating rolling prerelease '$Tag' ..."
-            Invoke-Gh release create $Tag --repo $Repo --prerelease --title 'Native build cache' `
-                --notes 'vcpkg binary cache tarballs, one <baseline>-<rid>.tgz per vcpkg baseline + RID. Anonymous pull, fast native builds. Auto-managed, do not edit.'
+            Write-Host "Creating prerelease for baseline '$Tag' ..."
+            Invoke-Gh release create $Tag --repo $Repo --prerelease --title "vcpkg baseline $Baseline" `
+                --notes 'vcpkg binary cache tarballs for this baseline, one <rid>.tgz per RID. Anonymous pull, fast native builds. Auto-managed, do not edit.'
         }
     }
 

@@ -64,8 +64,17 @@ jobs:
           ref: ${{ inputs.ziti_ref || 'main' }}
           fetch-depth: 0
 
+      # The builder container has no sudo, so the build action's apt step (awalsh128/cache-apt-pkgs-action, which
+      # calls sudo) silently no-ops and autotools never land. A cold cache then fails building libsodium from
+      # source ("requires autoconf/autoconf-archive/automake/libtool"). Install them as root up front. No-op on a
+      # warm cache. mac/windows don't hit this (brew works without sudo; Windows libsodium uses MSVC).
+      - name: Install autotools in builder container (Linux, no sudo)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: apt-get update && apt-get install -y autoconf autoconf-archive automake libtool pkg-config
+
       # Runs ziti-sdk-c's real build (configure installs all vcpkg deps into ${GITHUB_WORKSPACE}/.ci.cache). The
-      # action also installs the per-OS prereqs (gh, autotools, brew) itself, so we do not.
+      # action also installs the per-OS prereqs (gh, brew) itself.
       - name: Build ziti-sdk-c for ${{ matrix.spec.target }}
         uses: ./.github/actions/build
         with:
@@ -80,6 +89,9 @@ jobs:
         with:
           name: cache-${{ matrix.spec.rid }}
           path: ${{ github.workspace }}/.ci.cache
+          # .ci.cache is a DOTTED dir; without this, upload-artifact treats the whole tree as hidden and
+          # uploads nothing ("No files were found"), even though vcpkg populated it.
+          include-hidden-files: true
           if-no-files-found: warn
 
   # One publish job on a hosted runner (pwsh + gh guaranteed; the linux build legs run in a container that may

@@ -39,11 +39,10 @@ repo's own Releases. Because it reuses ziti-sdk-c's build verbatim, there is zer
 Everyone else is a **pure anonymous reader** - no token needed to pull, and no cross-repo push auth needed to
 produce (the producer writes to its own releases with the plain `GITHUB_TOKEN`).
 
-- **Keyed by the vcpkg baseline, not the ziti version.** Asset names are `<builtin-baseline>-<rid>.tgz`
-  (the baseline is read from ziti-sdk-c's `vcpkg.json`). Any consumer that shares the baseline reuses the
-  same deps; a baseline bump just re-caches under a new asset name.
-- **One rolling release** (tag `native-build-cache`) holds every baseline's tarballs.
-- Pull URL: `https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/native-build-cache/<baseline>-<rid>.tgz`
+- **One release per vcpkg baseline.** The release tag IS the `builtin-baseline` (read from ziti-sdk-c's
+  `vcpkg.json`), and each holds one `<rid>.tgz` per RID. Any consumer that shares the baseline reuses the same
+  deps; a baseline bump lands in its own release, and pruning a stale baseline is just deleting that release.
+- Pull URL: `https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/<baseline>/<rid>.tgz`
 
 ## Using it (consumers + developers)
 
@@ -84,8 +83,27 @@ iex (irm https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main
 RID is auto-detected; override with `RID=...` (bash) or `-Rid` (pwsh). Valid RIDs: `linux-x64`, `linux-arm`,
 `linux-arm64`, `osx-arm64`, `osx-x64`, `win-x64`, `win-x86`, `win-arm64`. A miss (no asset for your
 baseline+RID) is fine: vcpkg just builds those deps and fills the dir. Prefer to do it by hand? It is only:
-download `<baseline>-<rid>.tgz` from the release, `tar -xz` into a dir, and set
+download `<rid>.tgz` from the release tagged with your baseline, `tar -xz` into a dir, and set
 `VCPKG_BINARY_SOURCES=clear;files,<dir>,readwrite`.
+
+### Then build - that's the whole point
+
+**There is no separate "use the package" step.** This is a vcpkg *binary cache*, not an SDK: the extracted dir
+is a pile of prebuilt dependency archives (`openssl`, `libuv`, `protobuf-c`, ...) named by vcpkg's ABI hash. You
+do not include or link it directly. You consume it simply by **building as you normally would** in the same
+shell - vcpkg sees `VCPKG_BINARY_SOURCES` and replays each dependency from the dir instead of compiling it:
+
+```bash
+# after the restore step above, in the SAME shell:
+cmake --preset ci-linux-x64 -B build      # ziti-sdk-c; or your own project's configure / `vcpkg install`
+cmake --build build
+# vcpkg restores openssl/libuv/protobuf-c/... from the cache; the slow first build becomes minutes, not an hour
+```
+
+Two things to know:
+- It must be the **same shell** the restore set `VCPKG_BINARY_SOURCES` in (or set that variable yourself).
+- `readwrite` means your build also *writes* any dep the cache was missing back into the dir, so a partial cache
+  fills in locally. (Only CI with a token can push back to the shared release.)
 
 ### GitHub Actions (the easy CI path)
 
