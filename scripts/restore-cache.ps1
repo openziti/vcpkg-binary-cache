@@ -12,7 +12,7 @@
 
     No clone, one line (Invoke-Expression runs in the current scope, so the export sticks):
 
-      iex (irm https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.ps1)
+      iex (irm https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.ps1)
 
     Needs: PowerShell 5.1+ (or 7), plus curl/tar (bundled on Windows 10+). A miss (no asset) is fine - vcpkg just
     builds those deps and populates the dir.
@@ -22,8 +22,9 @@ param(
     [string] $VcpkgJson = './vcpkg.json',
     [string] $Rid,
     [string] $CacheDir,
-    [string] $Repo = 'openziti/ziti-sdk-c-binary-cache',
-    [string] $Tag   # one release per baseline; defaults to the baseline read below
+    [string] $Repo = 'openziti/vcpkg-binary-cache',
+    [string] $Prefix = 'csdk',   # which project's cache: csdk, tsdk, ... (use -Prefix tsdk for ziti-tunnel-sdk-c)
+    [string] $Tag                # defaults to <Prefix>-<baseline> below
 )
 $ErrorActionPreference = 'Stop'
 
@@ -39,7 +40,7 @@ if (-not (Test-Path -LiteralPath $VcpkgJson)) { Write-Error "ziti-cache: vcpkg.j
 $baseline = (Get-Content -LiteralPath $VcpkgJson -Raw | ConvertFrom-Json).'builtin-baseline'
 if (-not $baseline) { Write-Error "ziti-cache: no builtin-baseline in '$VcpkgJson'"; return }
 Write-Host "[ziti-cache]                            $baseline"
-if (-not $Tag) { $Tag = "baseline-$baseline" }   # GitHub forbids a tag that is exactly 40/64 hex chars
+if (-not $Tag) { $Tag = "$Prefix-$baseline" }   # one release per project+baseline
 
 if (-not $CacheDir) { $CacheDir = Join-Path $PWD 'vcpkg-bincache' }
 New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null

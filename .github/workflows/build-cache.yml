@@ -118,7 +118,7 @@ jobs:
 
       - name: Ensure the cache release exists
         shell: pwsh
-        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -VcpkgJson ./ziti-sdk-c/vcpkg.json
+        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -Prefix csdk -VcpkgJson ./ziti-sdk-c/vcpkg.json
 
       - name: Download all harvested caches
         uses: actions/download-artifact@v4
@@ -135,5 +135,5 @@ jobs:
           foreach ($d in $dirs) {
             $rid = $d.Name -replace '^cache-', ''
             Write-Host "==> saving $rid (baseline $baseline)"
-            ./scripts/sync-vcpkg-cache.ps1 -Action save -Rid $rid -CacheDir $d.FullName -Baseline $baseline
+            ./scripts/sync-vcpkg-cache.ps1 -Action save -Prefix csdk -Rid $rid -CacheDir $d.FullName -Baseline $baseline
           }

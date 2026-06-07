@@ -40,8 +40,11 @@
 .PARAMETER VcpkgJson
     Path to the vcpkg manifest to read the baseline from. Defaults to native/ZitiNativeApiForDotnetCore/vcpkg.json.
 
+.PARAMETER Prefix
+    Project key that namespaces the release (csdk, tsdk, ...). The tag is `<Prefix>-<baseline>`. Defaults to csdk.
+
 .PARAMETER Tag
-    Release tag. Defaults to the vcpkg baseline (one release per baseline). Override only for testing.
+    Release tag. Defaults to `<Prefix>-<baseline>` (one release per project + baseline). Override only for testing.
 
 .PARAMETER Token
     Token with contents:write, for ensure-release/save. Defaults to GH_TOKEN then GITHUB_TOKEN. Not needed for
@@ -58,6 +61,7 @@ param(
     [string] $CacheDir,
     [string] $Repo = $env:GITHUB_REPOSITORY,
     [string] $VcpkgJson = (Join-Path $PSScriptRoot '..' 'ziti-sdk-c' 'vcpkg.json'),
+    [string] $Prefix = 'csdk',
     [string] $Tag,
     [string] $Token = ($env:GH_TOKEN ? $env:GH_TOKEN : $env:GITHUB_TOKEN)
 )
@@ -74,10 +78,11 @@ if ([string]::IsNullOrWhiteSpace($Baseline)) {
     $Baseline = (Get-Content -LiteralPath $VcpkgJson -Raw | ConvertFrom-Json).'builtin-baseline'
     if ([string]::IsNullOrWhiteSpace($Baseline)) { throw "no builtin-baseline in $VcpkgJson (pass -Baseline)." }
 }
-# One release per vcpkg baseline: tag is `baseline-<hash>` (GitHub rejects a tag that is exactly 40/64 hex
-# chars, so the bare baseline cannot be the tag), assets are just <rid>.tgz. A baseline bump lands in its own
-# release; pruning a stale baseline is just deleting that release.
-if ([string]::IsNullOrWhiteSpace($Tag)) { $Tag = "baseline-$Baseline" }
+# One release per PROJECT + vcpkg baseline: tag is `<prefix>-<hash>` (e.g. csdk-..., tsdk-...). Two projects can
+# land on the same baseline yet build different ABIs (different overlays), so they need separate releases; the
+# prefix keeps them apart. (It also sidesteps GitHub rejecting a tag that is exactly 40/64 hex chars.) Assets are
+# just <rid>.tgz. A baseline bump lands in its own release; pruning a stale one is just deleting that release.
+if ([string]::IsNullOrWhiteSpace($Tag)) { $Tag = "$Prefix-$Baseline" }
 $asset = "$Rid.tgz"
 $shaAsset = "$asset.sha256"
 $downloadBase = "https://github.com/$Repo/releases/download/$Tag"
@@ -129,9 +134,9 @@ switch ($Action) {
             Write-Host "Release '$Tag' already exists."
         }
         else {
-            Write-Host "Creating prerelease for baseline '$Tag' ..."
-            Invoke-Gh release create $Tag --repo $Repo --prerelease --title "vcpkg baseline $Baseline" `
-                --notes 'vcpkg binary cache tarballs for this baseline, one <rid>.tgz per RID. Anonymous pull, fast native builds. Auto-managed, do not edit.'
+            Write-Host "Creating prerelease '$Tag' ..."
+            Invoke-Gh release create $Tag --repo $Repo --prerelease --title "$Prefix @ vcpkg baseline $Baseline" `
+                --notes "vcpkg binary cache tarballs for $Prefix at this baseline, one <rid>.tgz per RID. Anonymous pull, fast native builds. Auto-managed, do not edit."
         }
     }
 

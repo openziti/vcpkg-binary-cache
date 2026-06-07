@@ -1,8 +1,11 @@
-# ziti-sdk-c-binary-cache
+# vcpkg-binary-cache
 
-A shared [vcpkg](https://vcpkg.io) **binary cache** for [ziti-sdk-c](https://github.com/openziti/ziti-sdk-c)'s
-native dependencies (openssl, libuv, protobuf-c, etc.). It exists so ziti-sdk-c, ziti-sdk-csharp,
-ziti-tunnel-sdk-c, and individual developers don't each recompile those deps from scratch on every build.
+A shared [vcpkg](https://vcpkg.io) **binary cache** for the native dependencies (openssl, libuv, protobuf-c,
+etc.) of OpenZiti's C-based SDKs: [ziti-sdk-c](https://github.com/openziti/ziti-sdk-c),
+[ziti-tunnel-sdk-c](https://github.com/openziti/ziti-tunnel-sdk-c), and ziti-sdk-csharp's native lib. It exists
+so those repos and individual developers don't each recompile those deps from scratch on every build. Each
+producer builds a project's real `vcpkg.json`, so the cache is keyed by project + vcpkg baseline (one release
+per project+baseline, tagged `<project>-<baseline>`, e.g. `csdk-...`, `tsdk-...`).
 
 ## TL;DR
 
@@ -11,15 +14,15 @@ with the `vcpkg.json` you build against), then `cmake`/`vcpkg` as normal:
 
 ```bash
 # Linux / macOS - SOURCE it so the export sticks
-source <(curl -fsSL https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.sh)
+source <(curl -fsSL https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.sh)
 ```
 ```powershell
 # Windows - dot-source via iex
-iex (irm https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.ps1)
+iex (irm https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.ps1)
 ```
 ```yaml
 # GitHub Actions
-- uses: openziti/ziti-sdk-c-binary-cache/restore@main
+- uses: openziti/vcpkg-binary-cache/restore@main
   with: { vcpkg-json: vcpkg.json, rid: linux-x64 }
 ```
 
@@ -39,11 +42,11 @@ repo's own Releases. Because it reuses ziti-sdk-c's build verbatim, there is zer
 Everyone else is a **pure anonymous reader** - no token needed to pull, and no cross-repo push auth needed to
 produce (the producer writes to its own releases with the plain `GITHUB_TOKEN`).
 
-- **One release per vcpkg baseline.** The release is tagged `baseline-<builtin-baseline>` (GitHub forbids a
-  tag that is exactly 40/64 hex chars, so the bare baseline can't be the tag), read from ziti-sdk-c's
-  `vcpkg.json`, and each holds one `<rid>.tgz` per RID. Any consumer that shares the baseline reuses the same
-  deps; a baseline bump lands in its own release, and pruning a stale baseline is just deleting that release.
-- Pull URL: `https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/baseline-<baseline>/<rid>.tgz`
+- **One release per project + vcpkg baseline.** The release is tagged `<project>-<builtin-baseline>` (e.g.
+  `csdk-56bb2411...`, `tsdk-c3867e71...`), and each holds one `<rid>.tgz` per RID. The project prefix matters:
+  csdk and tsdk can share a baseline yet build different ABIs (different vcpkg overlays), so each gets its own
+  release. A baseline bump lands in its own release; pruning a stale one is just deleting that release.
+- Pull URL: `https://github.com/openziti/vcpkg-binary-cache/releases/download/<project>-<baseline>/<rid>.tgz`
 
 ## Using it (consumers + developers)
 
@@ -57,9 +60,9 @@ root** (the dir holding the `vcpkg.json` you build against) so it finds the base
 Needs `curl` + `tar` (`jq` optional). It must be **sourced** so the export lands in your shell. No clone needed:
 
 ```bash
-source <(curl -fsSL https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.sh)
+source <(curl -fsSL https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.sh)
 # build against a different manifest? pass its path (positional args flow through the curl form too):
-source <(curl -fsSL https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.sh) path/to/vcpkg.json
+source <(curl -fsSL https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.sh) path/to/vcpkg.json
 ```
 
 Cloned the repo works the same, and lets you override via env `RID` / `ZITI_CACHE_DIR` / `ZITI_CACHE_TAG`:
@@ -75,16 +78,23 @@ Windows 10+ ships `curl`/`tar`. **Dot-source** it (or `iex` the one-liner) so `$
 
 ```powershell
 # no clone:
-iex (irm https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.ps1)
+iex (irm https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.ps1)
 # cloned (dot-source; lets you pass -VcpkgJson / -Rid):
 . .\scripts\restore-cache.ps1
 . .\scripts\restore-cache.ps1 -VcpkgJson native\ZitiNativeApiForDotnetCore\vcpkg.json
 ```
 
+**Building ziti-tunnel-sdk-c (or anything other than ziti-sdk-c)?** Pick the matching project prefix so you pull
+the right release: `ZITI_CACHE_PREFIX=tsdk` (bash) or `-Prefix tsdk` (pwsh). It defaults to `csdk`.
+
+```bash
+ZITI_CACHE_PREFIX=tsdk source <(curl -fsSL https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.sh)
+```
+
 RID is auto-detected; override with `RID=...` (bash) or `-Rid` (pwsh). Valid RIDs: `linux-x64`, `linux-arm`,
 `linux-arm64`, `osx-arm64`, `osx-x64`, `win-x64`, `win-x86`, `win-arm64`. A miss (no asset for your
-baseline+RID) is fine: vcpkg just builds those deps and fills the dir. Prefer to do it by hand? It is only:
-download `<rid>.tgz` from the release tagged with your baseline, `tar -xz` into a dir, and set
+prefix+baseline+RID) is fine: vcpkg just builds those deps and fills the dir. Prefer to do it by hand? It is
+only: download `<rid>.tgz` from the release tagged `<project>-<baseline>`, `tar -xz` into a dir, and set
 `VCPKG_BINARY_SOURCES=clear;files,<dir>,readwrite`.
 
 ### Then build - that's the whole point
@@ -113,7 +123,17 @@ Things to know:
   rebuilds that dep (and `readwrite` files it into your local dir).
 - The value begins with `clear`, which **disables vcpkg's default per-user archive cache**
   (`VCPKG_DEFAULT_BINARY_CACHE` / `~/.cache/vcpkg/archives`) and **replaces** any `VCPKG_BINARY_SOURCES` you had
-  set (team NuGet feed, GHA cache, ...) for that shell. Drop `clear` or set the variable yourself to layer them.
+  set (team NuGet feed, GHA cache, ...) for that shell. `VCPKG_BINARY_SOURCES` is a `;`-separated list of cache
+  backends vcpkg reads left-to-right (`clear`, `default,<rw>`, `files,<dir>,<rw>`, `nuget,<uri>,<rw>`,
+  `x-gha,<rw>`; `<rw>` = `read`/`write`/`readwrite`). To use the ziti cache *and* keep another, don't let the
+  script set the variable - set it yourself with both entries:
+
+  ```bash
+  # ziti cache (read) plus your own per-user cache (read+write)
+  export VCPKG_BINARY_SOURCES="clear;default,readwrite;files,/path/to/vcpkg-bincache,read"
+  # ziti cache plus a team NuGet feed
+  export VCPKG_BINARY_SOURCES="clear;nuget,https://my.feed/index.json,readwrite;files,/path/to/vcpkg-bincache,read"
+  ```
 
 ### GitHub Actions (the easy CI path)
 
@@ -121,15 +141,17 @@ Drop one step into any consumer workflow. It pulls the cache and exports `VCPKG_
 step after it:
 
 ```yaml
-- uses: openziti/ziti-sdk-c-binary-cache/restore@main
+- uses: openziti/vcpkg-binary-cache/restore@main
   with:
     vcpkg-json: native/ZitiNativeApiForDotnetCore/vcpkg.json   # the manifest you build against
     rid: linux-x64                                             # match the runner
+    prefix: csdk                                               # csdk (default) | tsdk | ... = which project's cache
 # later steps (cmake --preset ..., vcpkg install ...) now get the deps from the cache automatically
 ```
 
-Inputs: `vcpkg-json` and `rid` (required); `cache-dir`, `repo`, `tag`, `set-binary-sources` (optional). Pin
-`@main` until a `v1` tag is cut. Requires PowerShell (preinstalled on all GitHub-hosted runners).
+Inputs: `vcpkg-json` and `rid` (required); `prefix` (default `csdk`), `cache-dir`, `repo`, `tag`,
+`set-binary-sources` (optional). Pin `@main` until a `v1` tag is cut. Requires PowerShell (preinstalled on all
+GitHub-hosted runners).
 
 ### CI by hand, or any OS with PowerShell 7
 
@@ -137,7 +159,7 @@ Inputs: `vcpkg-json` and `rid` (required); `cache-dir`, `repo`, `tag`, `set-bina
 
 ```powershell
 ./scripts/sync-vcpkg-cache.ps1 -Action restore -Rid linux-x64 -VcpkgJson path/to/vcpkg.json `
-    -CacheDir ./vcpkg-bincache -Repo openziti/ziti-sdk-c-binary-cache
+    -CacheDir ./vcpkg-bincache -Repo openziti/vcpkg-binary-cache
 # then set VCPKG_BINARY_SOURCES=clear;files,./vcpkg-bincache,readwrite before building
 ```
 

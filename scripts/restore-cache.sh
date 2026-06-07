@@ -7,18 +7,22 @@
 #     source scripts/restore-cache.sh path/to/vcpkg.json
 #
 #   No clone, one line:
-#     source <(curl -fsSL https://raw.githubusercontent.com/openziti/ziti-sdk-c-binary-cache/main/scripts/restore-cache.sh)
+#     source <(curl -fsSL https://raw.githubusercontent.com/openziti/vcpkg-binary-cache/main/scripts/restore-cache.sh)
 #
 #   Or capture the export without sourcing:
 #     eval "$(bash scripts/restore-cache.sh)"
 #
-# Overrides via env: RID, ZITI_CACHE_DIR, ZITI_CACHE_REPO, ZITI_CACHE_TAG.
+# Building ziti-tunnel-sdk-c (or another project) instead of ziti-sdk-c? Set ZITI_CACHE_PREFIX to that project's
+# key so you pull the right release:  ZITI_CACHE_PREFIX=tsdk source <(curl ... restore-cache.sh) ./vcpkg.json
+#
+# Overrides via env: RID, ZITI_CACHE_PREFIX (default csdk), ZITI_CACHE_DIR, ZITI_CACHE_REPO, ZITI_CACHE_TAG.
 # Needs: bash or zsh, curl, tar (jq optional - falls back to grep for the baseline).
 
 __ziti_restore_cache() {
     local vcpkg_json="${1:-./vcpkg.json}"
-    local repo="${ZITI_CACHE_REPO:-openziti/ziti-sdk-c-binary-cache}"
-    local tag="${ZITI_CACHE_TAG:-}"   # one release per baseline; defaults to the baseline below
+    local repo="${ZITI_CACHE_REPO:-openziti/vcpkg-binary-cache}"
+    local prefix="${ZITI_CACHE_PREFIX:-csdk}"   # which project's cache: csdk, tsdk, ...
+    local tag="${ZITI_CACHE_TAG:-}"             # defaults to <prefix>-<baseline> below
     local cache_dir="${ZITI_CACHE_DIR:-$PWD/vcpkg-bincache}"
     local rid="${RID:-}"
 
@@ -62,7 +66,7 @@ __ziti_restore_cache() {
     fi
     echo "[ziti-cache]                            $baseline" >&2
 
-    [ -z "$tag" ] && tag="baseline-$baseline"   # GitHub forbids a tag that is exactly 40/64 hex chars
+    [ -z "$tag" ] && tag="$prefix-$baseline"   # one release per project+baseline
     local url="https://github.com/$repo/releases/download/$tag/$rid.tgz"
     if ! mkdir -p "$cache_dir"; then return 1; fi
     echo "[ziti-cache] 3/4 downloading cache ..... $url" >&2

@@ -1,0 +1,53 @@
+name: 'Restore ziti vcpkg binary cache'
+description: 'Pull prebuilt ziti-sdk-c vcpkg dependencies for a RID and point vcpkg at them via VCPKG_BINARY_SOURCES.'
+
+inputs:
+  vcpkg-json:
+    description: 'Path to the vcpkg.json whose builtin-baseline keys the cache.'
+    required: true
+  rid:
+    description: 'Runtime identifier, e.g. linux-x64, win-x64, win-x86, osx-arm64, osx-x64.'
+    required: true
+  prefix:
+    description: "Which project's cache to pull (csdk, tsdk, ...). The release is <prefix>-<baseline>."
+    required: false
+    default: 'csdk'
+  cache-dir:
+    description: 'Directory to extract the cache into. Defaults to <workspace>/vcpkg-bincache.'
+    required: false
+    default: ''
+  repo:
+    description: 'owner/repo hosting the cache release.'
+    required: false
+    default: 'openziti/vcpkg-binary-cache'
+  tag:
+    description: 'Release tag holding the cache assets. Defaults to the vcpkg baseline (one release per baseline).'
+    required: false
+    default: ''
+  set-binary-sources:
+    description: 'Export VCPKG_BINARY_SOURCES to GITHUB_ENV so later steps pick it up automatically.'
+    required: false
+    default: 'true'
+
+outputs:
+  cache-dir:
+    description: 'Absolute path the cache was extracted into.'
+    value: ${{ steps.restore.outputs.cache-dir }}
+
+runs:
+  using: composite
+  steps:
+    - id: restore
+      shell: pwsh
+      run: |
+        $cacheDir = '${{ inputs.cache-dir }}'
+        if ([string]::IsNullOrWhiteSpace($cacheDir)) { $cacheDir = Join-Path $env:GITHUB_WORKSPACE 'vcpkg-bincache' }
+        New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+        $cacheDir = (Resolve-Path -LiteralPath $cacheDir).Path
+        & "${{ github.action_path }}/../scripts/sync-vcpkg-cache.ps1" -Action restore `
+          -Rid '${{ inputs.rid }}' -VcpkgJson '${{ inputs.vcpkg-json }}' -CacheDir $cacheDir `
+          -Repo '${{ inputs.repo }}' -Prefix '${{ inputs.prefix }}' -Tag '${{ inputs.tag }}'
+        "cache-dir=$cacheDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        if ('${{ inputs.set-binary-sources }}' -eq 'true') {
+          "VCPKG_BINARY_SOURCES=clear;files,$cacheDir,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        }
