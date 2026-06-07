@@ -39,10 +39,11 @@ repo's own Releases. Because it reuses ziti-sdk-c's build verbatim, there is zer
 Everyone else is a **pure anonymous reader** - no token needed to pull, and no cross-repo push auth needed to
 produce (the producer writes to its own releases with the plain `GITHUB_TOKEN`).
 
-- **One release per vcpkg baseline.** The release tag IS the `builtin-baseline` (read from ziti-sdk-c's
-  `vcpkg.json`), and each holds one `<rid>.tgz` per RID. Any consumer that shares the baseline reuses the same
+- **One release per vcpkg baseline.** The release is tagged `baseline-<builtin-baseline>` (GitHub forbids a
+  tag that is exactly 40/64 hex chars, so the bare baseline can't be the tag), read from ziti-sdk-c's
+  `vcpkg.json`, and each holds one `<rid>.tgz` per RID. Any consumer that shares the baseline reuses the same
   deps; a baseline bump lands in its own release, and pruning a stale baseline is just deleting that release.
-- Pull URL: `https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/<baseline>/<rid>.tgz`
+- Pull URL: `https://github.com/openziti/ziti-sdk-c-binary-cache/releases/download/baseline-<baseline>/<rid>.tgz`
 
 ## Using it (consumers + developers)
 

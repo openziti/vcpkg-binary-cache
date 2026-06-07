@@ -36,7 +36,7 @@ if (-not $Rid) { Write-Error "ziti-cache: could not detect a RID (PROCESSOR_ARCH
 if (-not (Test-Path -LiteralPath $VcpkgJson)) { Write-Error "ziti-cache: vcpkg.json not found at '$VcpkgJson' (pass -VcpkgJson)"; return }
 $baseline = (Get-Content -LiteralPath $VcpkgJson -Raw | ConvertFrom-Json).'builtin-baseline'
 if (-not $baseline) { Write-Error "ziti-cache: no builtin-baseline in '$VcpkgJson'"; return }
-if (-not $Tag) { $Tag = $baseline }
+if (-not $Tag) { $Tag = "baseline-$baseline" }   # GitHub forbids a tag that is exactly 40/64 hex chars
 
 if (-not $CacheDir) { $CacheDir = Join-Path $PWD 'vcpkg-bincache' }
 New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null

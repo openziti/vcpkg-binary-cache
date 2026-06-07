@@ -74,9 +74,10 @@ if ([string]::IsNullOrWhiteSpace($Baseline)) {
     $Baseline = (Get-Content -LiteralPath $VcpkgJson -Raw | ConvertFrom-Json).'builtin-baseline'
     if ([string]::IsNullOrWhiteSpace($Baseline)) { throw "no builtin-baseline in $VcpkgJson (pass -Baseline)." }
 }
-# One release per vcpkg baseline: the release TAG is the baseline, so assets are just <rid>.tgz. A baseline
-# bump lands in its own release; pruning a stale baseline is just deleting that release.
-if ([string]::IsNullOrWhiteSpace($Tag)) { $Tag = $Baseline }
+# One release per vcpkg baseline: tag is `baseline-<hash>` (GitHub rejects a tag that is exactly 40/64 hex
+# chars, so the bare baseline cannot be the tag), assets are just <rid>.tgz. A baseline bump lands in its own
+# release; pruning a stale baseline is just deleting that release.
+if ([string]::IsNullOrWhiteSpace($Tag)) { $Tag = "baseline-$Baseline" }
 $asset = "$Rid.tgz"
 $shaAsset = "$asset.sha256"
 $downloadBase = "https://github.com/$Repo/releases/download/$Tag"

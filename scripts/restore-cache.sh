@@ -59,7 +59,7 @@ __ziti_restore_cache() {
         return 1
     fi
 
-    [ -z "$tag" ] && tag="$baseline"
+    [ -z "$tag" ] && tag="baseline-$baseline"   # GitHub forbids a tag that is exactly 40/64 hex chars
     local url="https://github.com/$repo/releases/download/$tag/$rid.tgz"
     if ! mkdir -p "$cache_dir"; then return 1; fi
     echo "ziti-cache: rid=$rid baseline=$baseline" >&2
