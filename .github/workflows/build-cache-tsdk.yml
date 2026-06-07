@@ -1,0 +1,116 @@
+name: Build vcpkg binary cache (tsdk)
+
+# Producer for ziti-tunnel-sdk-c's vcpkg binary cache. Same idea as the csdk producer (build-cache.yml) but for
+# a different project: to get the exact ABI ttsdk ships, it checks out ziti-tunnel-sdk-c and runs ITS OWN build
+# action (./.github/actions/build) per preset, on the same runners ttsdk builds on, mirroring ttsdk's callable
+# cmake.yml. That action writes a vcpkg `files` cache to ./vcpkg_cache; we harvest it and publish to this repo's
+# Releases under tsdk-<baseline>.
+#
+# Keyed by PRESET, not RID: ttsdk has three Windows presets (mingw / win32crypto / arm64-vs2022) with different
+# toolchains, so the preset is the real ABI key. Assets are <preset>.tgz. Consumers pull with
+# ZITI_CACHE_PREFIX=tsdk and RID set to the preset name (see README).
+on:
+  schedule:
+    - cron: '37 4 * * *'   # daily, offset from the csdk producer (17 4)
+  workflow_dispatch:
+    inputs:
+      ttsdk_ref:
+        description: ziti-tunnel-sdk-c ref (tag/branch) whose deps to cache
+        default: main
+        required: true
+
+concurrency:
+  group: build-cache-tsdk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Mirror ttsdk's cmake.yml matrix verbatim (runner + preset). No job-level container: ttsdk runs Linux on bare
+  # ubuntu-22.04 and its build action spins up its own Docker (openziti-tunnel-build-action) internally.
+  build:
+    name: ${{ matrix.spec.name }}
+    runs-on: ${{ matrix.spec.runner }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
+    strategy:
+      fail-fast: false
+      matrix:
+        spec:
+          - { name: 'Linux x86_64',                 runner: 'ubuntu-22.04',   preset: 'linux-x64' }
+          - { name: 'Linux ARM',                    runner: 'ubuntu-22.04',   preset: 'linux-arm' }
+          - { name: 'Linux ARM64',                  runner: 'ubuntu-22.04',   preset: 'linux-arm64' }
+          - { name: 'MacOS x86_64',                 runner: 'macos-15-intel', preset: 'macOS-x64' }
+          - { name: 'MacOS arm64',                  runner: 'macos-15',       preset: 'macOS-arm64' }
+          - { name: 'Windows x86_64 (mingw)',       runner: 'windows-2022',   preset: 'windows-x64-mingw' }
+          - { name: 'Windows x86_64 (win32crypto)', runner: 'windows-2022',   preset: 'windows-x64-win32crypto' }
+          - { name: 'Windows ARM64 (vs2022)',       runner: 'windows-2022',   preset: 'windows-arm64-vs2022' }
+    steps:
+      # Mirror ttsdk's own checkout (cmake.yml): fetch-depth 0, NO submodules (its CI doesn't check them out).
+      - name: Checkout ziti-tunnel-sdk-c (${{ inputs.ttsdk_ref || 'main' }})
+        uses: actions/checkout@v4
+        with:
+          repository: openziti/ziti-tunnel-sdk-c
+          ref: ${{ inputs.ttsdk_ref || 'main' }}
+          fetch-depth: 0
+
+      # Runs ttsdk's real build; configure installs all vcpkg deps into ./vcpkg_cache. The action installs its own
+      # per-OS prereqs (brew on mac; its Docker action carries them on Linux).
+      - name: Build ziti-tunnel-sdk-c (${{ matrix.spec.preset }})
+        uses: ./.github/actions/build
+        with:
+          preset: ${{ matrix.spec.preset }}
+          target: bundle
+
+      # Harvest even on a late failure: vcpkg writes complete package archives during configure. include-hidden is
+      # defensive (vcpkg_cache itself is not dotted, but guards any dotfile vcpkg drops at the top level).
+      - name: Harvest vcpkg_cache for ${{ matrix.spec.preset }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-${{ matrix.spec.preset }}
+          path: ${{ github.workspace }}/vcpkg_cache
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  # One publish job on a hosted runner; uploads each preset's cache as tsdk-<baseline>/<preset>.tgz.
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4   # this repo, for scripts/
+
+      - name: Read ttsdk vcpkg.json (${{ inputs.ttsdk_ref || 'main' }}) for the baseline
+        uses: actions/checkout@v4
+        with:
+          repository: openziti/ziti-tunnel-sdk-c
+          ref: ${{ inputs.ttsdk_ref || 'main' }}
+          path: ttsdk
+          sparse-checkout: vcpkg.json
+          sparse-checkout-cone-mode: false
+
+      - name: Ensure the tsdk cache release exists
+        shell: pwsh
+        run: ./scripts/sync-vcpkg-cache.ps1 -Action ensure-release -Prefix tsdk -VcpkgJson ./ttsdk/vcpkg.json
+
+      - name: Download all harvested caches
+        uses: actions/download-artifact@v4
+        with:
+          path: harvested
+
+      - name: Pack + upload each preset's cache
+        shell: pwsh
+        run: |
+          $baseline = (Get-Content ./ttsdk/vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          if ([string]::IsNullOrWhiteSpace($baseline)) { throw "no builtin-baseline in ttsdk/vcpkg.json" }
+          $dirs = Get-ChildItem -Directory ./harvested -Filter 'cache-*' -ErrorAction SilentlyContinue
+          if (-not $dirs) { Write-Host "no harvested caches to publish"; return }
+          foreach ($d in $dirs) {
+            $preset = $d.Name -replace '^cache-', ''
+            Write-Host "==> saving tsdk $preset (baseline $baseline)"
+            ./scripts/sync-vcpkg-cache.ps1 -Action save -Prefix tsdk -Rid $preset -CacheDir $d.FullName -Baseline $baseline
+          }
